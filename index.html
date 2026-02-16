@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Reddit Random">
+    <meta name="theme-color" content="#FF4500">
+    <title>Reddit Random - 8 Comments</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+        .line-clamp-2 {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 via-white to-pink-50 min-h-screen">
+    <div id="app" class="flex items-center justify-center p-4 min-h-screen"></div>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <script>
+        const { createElement: h, useState, useEffect, useRef } = React;
+
+        function App() {
+            const [subreddit, setSubreddit] = useState('');
+            const [savedSubreddit, setSavedSubreddit] = useState(localStorage.getItem('savedSubreddit') || '');
+            const [phoneNumber, setPhoneNumber] = useState(localStorage.getItem('phoneNumber') || '');
+            const [comments, setComments] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [status, setStatus] = useState('');
+            const [error, setError] = useState('');
+            const [errorDetails, setErrorDetails] = useState('');
+            const [showSettings, setShowSettings] = useState(!localStorage.getItem('savedSubreddit'));
+            const [autoFetchEnabled, setAutoFetchEnabled] = useState(localStorage.getItem('autoFetchEnabled') === 'true');
+            const [nextFetchTime, setNextFetchTime] = useState(null);
+            const intervalRef = useRef(null);
+            const countdownRef = useRef(null);
+
+            const getDetailedError = (err, response) => {
+                let errorType = '❓ Unknown Error';
+                let details = '';
+                let solution = '';
+
+                if (response) {
+                    if (response.status === 429) {
+                        errorType = '⏱️ Rate Limit';
+                        details = 'Too many requests.';
+                        solution = 'Wait 10 minutes.';
+                    } else if (response.status === 403) {
+                        errorType = '🚫 Forbidden';
+                        details = 'Reddit blocked request.';
+                        solution = 'Try VPN.';
+                    } else if (response.status === 404) {
+                        errorType = '🔍 Not Found';
+                        details = 'Subreddit doesn\'t exist.';
+                        solution = 'Try "AskReddit".';
+                    } else if (response.status >= 500) {
+                        errorType = '💥 Server Error';
+                        details = 'Reddit servers down.';
+                        solution = 'Wait a few minutes.';
+                    }
+                }
+
+                if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
+                    errorType = '🌐 CORS Error';
+                    details = 'Cannot connect.';
+                    solution = 'Upload to GitHub Pages.';
+                }
+
+                return { errorType, details, solution };
+            };
+
+            const fetchRandomComments = async (sub) => {
+                if (!sub) return;
+                
+                setLoading(true);
+                setError('');
+                setErrorDetails('');
+                setStatus('Searching...');
+                
+                try {
+                    const strategies = [
+                        { sort: 'top', time: 'all' },
+                        { sort: 'top', time: 'year' },
+                        { sort: 'top', time: 'month' },
+                        { sort: 'controversial', time: 'all' },
+                        { sort: 'hot', time: null },
+                        { sort: 'new', time: null }
+                    ];
+                    
+                    const strategy = strategies[Math.floor(Math.random() * strategies.length)];
+                    setStatus(`Fetching ${strategy.sort} posts...`);
+                    
+                    const pagesToFetch = Math.floor(Math.random() * 3) + 8;
+                    let allPosts = [];
+                    let after = '';
+                    
+                    for (let page = 0; page < pagesToFetch; page++) {
+                        try {
+                            const time = (strategy.time && strategy.sort !== 'hot' && strategy.sort !== 'new') 
+                                ? `&t=${strategy.time}` : '';
+                            const url = `https://www.reddit.com/r/${sub}/${strategy.sort}.json?limit=100${time}${after}&raw_json=1`;
+                            
+                            const response = await fetch(url, {
+                                method: 'GET',
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'User-Agent': 'Mozilla/5.0'
+                                }
+                            });
+                            
+                            if (!response.ok) {
+                                const errorInfo = getDetailedError(new Error(`HTTP ${response.status}`), response);
+                                if (page === 0) {
+                                    throw new Error(`${errorInfo.errorType}\n${errorInfo.details}\n\n💡 ${errorInfo.solution}`);
+                                }
+                                break;
+                            }
+                            
+                            const data = await response.json();
+                            
+                            if (data.error === 404) {
+                                throw new Error('🔍 Not Found\n\nSubreddit doesn\'t exist.\n\n💡 Try: AskReddit');
+                            }
+                            
+                            const posts = data?.data?.children || [];
+                            if (posts.length === 0) break;
+                            
+                            allPosts = allPosts.concat(posts);
+                            after = data.data.after ? `&after=${data.data.after}` : '';
+                            
+                            setStatus(`Found ${allPosts.length} posts (${page + 1}/${pagesToFetch})...`);
+                            
+                            if (!after) break;
+                            await new Promise(r => setTimeout(r, 300));
+                        } catch (err) {
+                            if (page === 0) {
+                                const errorInfo = getDetailedError(err, null);
+                                throw new Error(`${errorInfo.errorType}\n${errorInfo.details}\n\n💡 ${errorInfo.solution}`);
+                            }
+                            break;
+                        }
+                    }
+                    
+                    if (allPosts.length === 0) {
+                        throw new Error('📭 No Posts\n\nNo posts found.\n\n💡 Try different subreddit.');
+                    }
+                    
+                    setStatus('Finding 8 comments...');
+                    
+                    const shuffled = allPosts.sort(() => Math.random() - 0.5);
+                    const foundComments = [];
+                    
+                    for (let attempt = 0; attempt < 50 && foundComments.length < 8; attempt++) {
+                        const post = shuffled[attempt % shuffled.length];
+                        
+                        try {
+                            setStatus(`Finding comment ${foundComments.length + 1}/8...`);
+                            
+                            const commentsUrl = `https://www.reddit.com${post.data.permalink}.json?limit=300&depth=10&raw_json=1`;
+                            const response = await fetch(commentsUrl, {
+                                headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+                            });
+                            
+                            if (!response.ok) {
+                                await new Promise(r => setTimeout(r, 200));
+                                continue;
+                            }
+                            
+                            const commentsData = await response.json();
+                            
+                            const getAllComments = (items) => {
+                                let all = [];
+                                const walk = (list, depth = 0) => {
+                                    if (!Array.isArray(list)) return;
+                                    for (let item of list) {
+                                        if (!item || !item.data) continue;
+                                        if (item.kind === 't1' && 
+                                            item.data?.body && 
+                                            item.data.body !== '[deleted]' && 
+                                            item.data.body !== '[removed]' &&
+                                            item.data.author !== '[deleted]' &&
+                                            item.data.body.length > 15) {
+                                            all.push({ ...item, depth: depth });
+                                        }
+                                        if (item.data?.replies?.data?.children) {
+                                            walk(item.data.replies.data.children, depth + 1);
+                                        }
+                                    }
+                                };
+                                walk(items);
+                                return all;
+                            };
+                            
+                            const postComments = getAllComments(commentsData[1]?.data?.children || []);
+                            
+                            if (postComments.length > 0) {
+                                const picked = postComments[Math.floor(Math.random() * postComments.length)];
+                                const postDate = new Date(post.data.created_utc * 1000);
+                                const yearsAgo = ((Date.now() - postDate) / (365.25 * 24 * 60 * 60 * 1000)).toFixed(1);
+                                
+                                foundComments.push({
+                                    body: picked.data.body,
+                                    author: picked.data.author,
+                                    score: picked.data.score,
+                                    postTitle: post.data.title,
+                                    postUrl: `https://www.reddit.com${post.data.permalink}`,
+                                    postDate: postDate.toLocaleDateString('en-US', {
+                                        year: 'numeric', month: 'short', day: 'numeric'
+                                    }),
+                                    yearsAgo: yearsAgo,
+                                    subreddit: sub,
+                                    depth: picked.depth || 0
+                                });
+                            }
+                            
+                            await new Promise(r => setTimeout(r, 200));
+                            
+                        } catch (err) {
+                            continue;
+                        }
+                    }
+                    
+                    if (foundComments.length === 0) {
+                        throw new Error('💬 No Comments\n\nNo comments found.\n\n💡 Try again.');
+                    }
+                    
+                    setComments(foundComments);
+                    setError('');
+                    setErrorDetails('');
+                    setStatus('');
+                    setLoading(false);
+                    
+                } catch (err) {
+                    console.error('Error:', err);
+                    
+                    if (err.message.includes('\n')) {
+                        const parts = err.message.split('\n');
+                        setError(parts[0]);
+                        setErrorDetails(parts.slice(1).join('\n'));
+                    } else {
+                        const errorInfo = getDetailedError(err, null);
+                        setError(errorInfo.errorType);
+                        setErrorDetails(`${errorInfo.details}\n\n💡 ${errorInfo.solution}`);
+                    }
+                    
+                    setComments([]);
+                    setStatus('');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleSave = () => {
+                if (subreddit.trim()) {
+                    const clean = subreddit.trim().replace(/^r\//, '');
+                    setSavedSubreddit(clean);
+                    localStorage.setItem('savedSubreddit', clean);
+                    if (phoneNumber.trim()) {
+                        localStorage.setItem('phoneNumber', phoneNumber.trim().replace(/[^0-9]/g, ''));
+                    }
+                    setShowSettings(false);
+                    fetchRandomComments(clean);
+                }
+            };
+
+            const sendToWhatsApp = (comment) => {
+                const msg = `🎲 Reddit (${comment.yearsAgo}y ago!)\n\nr/${comment.subreddit}\n${comment.postDate}\n\n"${comment.body}"\n\n— u/${comment.author} (↑${comment.score})\n\n${comment.postUrl}`;
+                const phone = localStorage.getItem('phoneNumber') || '';
+                const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                window.open(url, '_blank');
+            };
+
+            const toggleAutoFetch = () => {
+                const newValue = !autoFetchEnabled;
+                setAutoFetchEnabled(newValue);
+                localStorage.setItem('autoFetchEnabled', newValue);
+                
+                if (newValue) {
+                    if ('Notification' in window && Notification.permission === 'default') {
+                        Notification.requestPermission();
+                    }
+                    startAutoFetch();
+                } else {
+                    stopAutoFetch();
+                }
+            };
+
+            const startAutoFetch = () => {
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                if (countdownRef.current) clearInterval(countdownRef.current);
+                
+                const next = new Date(Date.now() + 15 * 60 * 1000);
+                setNextFetchTime(next);
+                
+                intervalRef.current = setInterval(() => {
+                    if (savedSubreddit) {
+                        fetchRandomComments(savedSubreddit);
+                        setNextFetchTime(new Date(Date.now() + 15 * 60 * 1000));
+                    }
+                }, 15 * 60 * 1000);
+                
+                countdownRef.current = setInterval(() => {
+                    setNextFetchTime(prev => prev ? new Date(prev) : null);
+                }, 1000);
+            };
+
+            const stopAutoFetch = () => {
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                if (countdownRef.current) clearInterval(countdownRef.current);
+                setNextFetchTime(null);
+            };
+
+            const getTimeUntilNext = () => {
+                if (!nextFetchTime) return '';
+                const diff = nextFetchTime - new Date();
+                if (diff <= 0) return 'Fetching...';
+                const minutes = Math.floor(diff / 60000);
+                const seconds = Math.floor((diff % 60000) / 1000);
+                return `${minutes}m ${seconds}s`;
+            };
+
+            useEffect(() => {
+                if (savedSubreddit && comments.length === 0 && !showSettings) {
+                    fetchRandomComments(savedSubreddit);
+                }
+                if (autoFetchEnabled && savedSubreddit) {
+                    startAutoFetch();
+                }
+                return () => stopAutoFetch();
+            }, []);
+
+            return h('div', { className: 'w-full max-w-4xl' },
+                h('div', { className: 'text-center mb-4' },
+                    h('div', { className: 'flex items-center justify-center gap-2 mb-1' },
+                        h('span', { className: 'text-3xl' }, '🎲'),
+                        h('h1', { className: 'text-2xl font-bold text-gray-800' }, 'Reddit × 8')
+                    ),
+                    h('p', { className: 'text-xs text-gray-600' }, '8-10 Pages • 8 Random Comments')
+                ),
+
+                showSettings ? h('div', { className: 'bg-white rounded-2xl shadow-xl p-6 border' },
+                    h('h2', { className: 'text-xl font-bold mb-3' }, '⚙️ Setup'),
+                    h('div', { className: 'space-y-3' },
+                        h('div', null,
+                            h('label', { className: 'block text-sm font-bold mb-2' }, '📍 Subreddit'),
+                            h('input', {
+                                type: 'text',
+                                value: subreddit,
+                                onChange: (e) => setSubreddit(e.target.value),
+                                onKeyPress: (e) => e.key === 'Enter' && handleSave(),
+                                placeholder: 'AskReddit',
+                                className: 'w-full px-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none',
+                                autoFocus: true
+                            })
+                        ),
+                        h('div', null,
+                            h('label', { className: 'block text-sm font-bold mb-2' }, '📱 WhatsApp (Optional)'),
+                            h('input', {
+                                type: 'tel',
+                                value: phoneNumber,
+                                onChange: (e) => setPhoneNumber(e.target.value),
+                                placeholder: '911234567890',
+                                className: 'w-full px-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none'
+                            })
+                        ),
+                        h('button', {
+                            onClick: handleSave,
+                            disabled: !subreddit.trim(),
+                            className: 'w-full bg-gradient-to-r from-blue-600 to-pink-600 text-white py-3 rounded-xl font-bold hover:from-blue-700 hover:to-pink-700 disabled:bg-gray-300 transition'
+                        }, '🚀 Start')
+                    )
+                ) : h('div', null,
+                    h('div', { className: 'bg-gradient-to-r from-blue-50 to-pink-50 rounded-xl p-3 mb-3 border flex items-center justify-between' },
+                        h('div', null,
+                            h('div', { className: 'font-bold text-xs' }, '🔄 Auto (15min)'),
+                            h('div', { className: 'text-xs text-gray-600' }, 
+                                autoFetchEnabled ? `${getTimeUntilNext()}` : 'Off'
+                            )
+                        ),
+                        h('button', {
+                            onClick: toggleAutoFetch,
+                            className: `relative inline-flex h-6 w-11 items-center rounded-full transition ${autoFetchEnabled ? 'bg-blue-600' : 'bg-gray-300'}`
+                        },
+                            h('span', {
+                                className: `inline-block h-4 w-4 rounded-full bg-white transition ${autoFetchEnabled ? 'translate-x-6' : 'translate-x-1'}`
+                            })
+                        )
+                    ),
+
+                    loading ? h('div', { className: 'bg-white rounded-xl shadow-xl p-8 text-center' },
+                        h('div', { className: 'text-5xl mb-3 animate-spin' }, '🔍'),
+                        h('p', { className: 'font-bold mb-2' }, 'Searching...'),
+                        h('p', { className: 'text-xs text-blue-600' }, status)
+                    ) : error ? h('div', { className: 'bg-red-50 border-2 border-red-300 rounded-xl p-5' },
+                        h('div', { className: 'text-3xl text-center mb-2' }, '⚠️'),
+                        h('p', { className: 'text-red-700 font-bold text-center mb-2 text-sm' }, error),
+                        errorDetails ? h('div', { className: 'bg-white rounded-lg p-3 mb-3' },
+                            h('pre', { 
+                                className: 'text-xs text-red-600 whitespace-pre-wrap',
+                                style: { wordBreak: 'break-word' }
+                            }, errorDetails)
+                        ) : null,
+                        h('button', {
+                            onClick: () => fetchRandomComments(savedSubreddit),
+                            className: 'w-full py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 font-bold text-sm'
+                        }, '🔄 Try Again')
+                    ) : comments.length > 0 ? h('div', null,
+                        h('div', { className: 'grid gap-3 mb-3' },
+                            comments.map((comment, idx) => 
+                                h('div', { 
+                                    key: idx,
+                                    className: 'bg-white rounded-xl shadow-lg p-4 border'
+                                },
+                                    h('div', { className: 'flex justify-between items-start mb-2' },
+                                        h('div', { className: 'flex flex-wrap gap-1' },
+                                            h('span', { className: 'text-xs font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full' }, `r/${comment.subreddit}`),
+                                            h('span', { className: 'text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full' }, `${comment.yearsAgo}y`)
+                                        ),
+                                        h('span', { className: 'text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full' }, `↑${comment.score}`)
+                                    ),
+                                    h('p', { className: 'text-xs text-gray-500 mb-2' }, comment.postDate),
+                                    h('a', {
+                                        href: comment.postUrl,
+                                        target: '_blank',
+                                        className: 'text-xs text-gray-700 hover:text-blue-600 font-semibold line-clamp-2 mb-2 block'
+                                    }, comment.postTitle),
+                                    h('p', { 
+                                        className: 'text-gray-800 text-sm leading-relaxed mb-2 whitespace-pre-wrap',
+                                        style: { wordBreak: 'break-word' }
+                                    }, comment.body),
+                                    h('div', { className: 'flex justify-between items-center pt-2 border-t' },
+                                        h('span', { className: 'text-xs font-bold text-gray-600' }, `— u/${comment.author}`),
+                                        h('button', {
+                                            onClick: () => sendToWhatsApp(comment),
+                                            className: 'text-xs bg-green-600 text-white px-2 py-1 rounded-lg hover:bg-green-700 font-bold'
+                                        }, '📱')
+                                    )
+                                )
+                            )
+                        ),
+                        h('div', { className: 'flex gap-2' },
+                            h('button', {
+                                onClick: () => fetchRandomComments(savedSubreddit),
+                                disabled: loading,
+                                className: 'flex-1 bg-gradient-to-r from-blue-600 to-pink-600 text-white py-3 rounded-xl font-bold hover:from-blue-700 hover:to-pink-700 disabled:bg-gray-300 transition text-sm'
+                            }, '🎲 Get 8 More'),
+                            h('button', {
+                                onClick: () => setShowSettings(true),
+                                className: 'px-5 bg-gray-100 py-3 rounded-xl hover:bg-gray-200 font-bold text-sm'
+                            }, '⚙️')
+                        ),
+                        h('p', { className: 'text-center text-xs text-gray-500 mt-3' }, `r/${savedSubreddit}`)
+                    ) : h('div', { className: 'bg-white rounded-xl shadow-xl p-8 text-center' },
+                        h('div', { className: 'text-5xl mb-3' }, '👋'),
+                        h('p', { className: 'text-gray-600 mb-3 text-sm' }, 'Get 8 random comments!'),
+                        h('button', {
+                            onClick: () => fetchRandomComments(savedSubreddit),
+                            className: 'bg-gradient-to-r from-blue-600 to-pink-600 text-white px-6 py-3 rounded-xl font-bold'
+                        }, '🎲 Get 8 Random')
+                    )
+                )
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('app'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
